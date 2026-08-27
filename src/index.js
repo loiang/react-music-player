@@ -108,6 +108,7 @@ export default class ReactJkMusicPlayer extends PureComponent {
     singer: '', // 当前歌手
     musicSrc: '', // 当前歌曲链
     lyric: '', // 当前歌词
+    lyricData: undefined, // 动态结构化歌词
     currentLyric: '',
     isMobile: IS_MOBILE,
     toggle: this.props.mode === MODE.FULL,
@@ -297,6 +298,7 @@ export default class ReactJkMusicPlayer extends PureComponent {
       audioLists,
       removeId,
       lyric,
+      lyricData,
       currentLyric,
       audioLyricVisible,
       isPlayDestroyed,
@@ -696,7 +698,16 @@ export default class ReactJkMusicPlayer extends PureComponent {
         {audioLyricVisible && (
           <Draggable>
             <div className={cls('music-player-lyric', lyricClassName)}>
-              {currentLyric || (lyric ? '♪' : locale.emptyLyricText)}
+              {currentLyric ||
+                (lyricData &&
+                ((lyricData.kind === 'timed' &&
+                  Array.isArray(lyricData.lines) &&
+                  lyricData.lines.length) ||
+                  (lyricData.kind === 'static' && lyricData.text))
+                  ? ''
+                  : lyric
+                  ? '♪'
+                  : locale.emptyLyricText)}
             </div>
           </Draggable>
         )}
@@ -833,8 +844,14 @@ export default class ReactJkMusicPlayer extends PureComponent {
     const playIndex = audioLists.findIndex(
       (audio) => audio[PLAYER_KEY] === playId,
     )
-    const { name, cover, musicSrc, singer, lyric = '' } =
-      audioLists[playIndex] || {}
+    const {
+      name,
+      cover,
+      musicSrc,
+      singer,
+      lyric = '',
+      lyricData,
+    } = audioLists[playIndex] || {}
 
     const loadAudio = (originMusicSrc) => {
       this.setState(
@@ -845,6 +862,8 @@ export default class ReactJkMusicPlayer extends PureComponent {
           singer,
           playId,
           lyric,
+          lyricData,
+          currentLyric: '',
           currentTime: 0,
           playing: false,
           loading: true,
@@ -1167,6 +1186,7 @@ export default class ReactJkMusicPlayer extends PureComponent {
           playing: false,
           canPlay: false,
           lyric: '',
+          lyricData: undefined,
           currentLyric: '',
           loadedProgress: 0,
         },
@@ -1183,6 +1203,7 @@ export default class ReactJkMusicPlayer extends PureComponent {
       musicSrc,
       soundValue,
       lyric,
+      lyricData,
       audioLists,
       currentLyric,
     } = this.state
@@ -1217,6 +1238,7 @@ export default class ReactJkMusicPlayer extends PureComponent {
       ended,
       startDate,
       lyric,
+      lyricData,
       currentLyric,
       playIndex: currentPlayIndex,
     }
@@ -1852,8 +1874,14 @@ export default class ReactJkMusicPlayer extends PureComponent {
   _getPlayInfo = (audioLists = []) => {
     const playId = this.getPlayId(audioLists)
 
-    const { name = '', cover = '', singer = '', musicSrc = '', lyric = '' } =
-      audioLists.find((audio) => audio[PLAYER_KEY] === playId) || {}
+    const {
+      name = '',
+      cover = '',
+      singer = '',
+      musicSrc = '',
+      lyric = '',
+      lyricData,
+    } = audioLists.find((audio) => audio[PLAYER_KEY] === playId) || {}
 
     return {
       name,
@@ -1861,6 +1889,7 @@ export default class ReactJkMusicPlayer extends PureComponent {
       singer,
       musicSrc,
       lyric,
+      lyricData,
       audioLists,
       playId,
     }
@@ -1995,7 +2024,21 @@ export default class ReactJkMusicPlayer extends PureComponent {
     // rapid track changes leave orphaned parsers writing the previous song's
     // lines into the shared currentLyric (navidrome #5661).
     this.lyric && this.lyric.stop()
-    this.lyric = new Lyric(this.state.lyric, this.onLyricChange)
+    this.lyricGeneration = (this.lyricGeneration || 0) + 1
+    const { lyricGeneration } = this
+    const lyricParser = new Lyric(
+      this.state.lyric,
+      (line) => {
+        if (
+          this.lyric === lyricParser &&
+          this.lyricGeneration === lyricGeneration
+        ) {
+          this.onLyricChange(line)
+        }
+      },
+      this.state.lyricData,
+    )
+    this.lyric = lyricParser
     // Start empty, then let the parser pick the line for the current position
     // (empty before the first line). Seeding lines[0] unconditionally would show
     // a line that isn't active yet when loaded paused or re-inited mid-playback.
@@ -2042,7 +2085,59 @@ export default class ReactJkMusicPlayer extends PureComponent {
     }
   }
 
-  updateAudioLists = (audioLists) => {
+  updateAudioLists = (audioLists, nextProps = this.props) => {
+    if (this.checkCurrentPlayingAudioIsInUpdatedAudioLists(nextProps)) {
+      const currentAudio = this.state.audioLists.find(
+        (audio) => audio[PLAYER_KEY] === this.state.playId,
+      )
+      const updatedCurrentAudio = audioLists.find(
+        (audio) =>
+          audio[PLAYER_KEY] === this.state.playId ||
+          audio.musicSrc === this.state.musicSrc ||
+          (currentAudio &&
+            currentAudio.uuid &&
+            audio.uuid === currentAudio.uuid),
+      )
+      const mergedAudioLists = this.state.audioLists.map((audio) =>
+        audio[PLAYER_KEY] === this.state.playId
+          ? {
+              ...audio,
+              lyric: updatedCurrentAudio.lyric || '',
+              lyricData: updatedCurrentAudio.lyricData,
+            }
+          : audio,
+      )
+      const info = this.getPlayInfo([
+        ...mergedAudioLists,
+        ...audioLists.filter(
+          (audio) =>
+            this.state.audioLists.findIndex(
+              (current) => current.musicSrc === audio.musicSrc,
+            ) === -1,
+        ),
+      ])
+      const lyricChanged =
+        this.state.lyric !== info.lyric ||
+        this.state.lyricData !== info.lyricData
+      this.setState(
+        {
+          audioLists: info.audioLists,
+          lyric: info.lyric,
+          lyricData: info.lyricData,
+          ...(lyricChanged ? { currentLyric: '' } : {}),
+        },
+        () => {
+          this.props.onAudioListsChange &&
+            this.props.onAudioListsChange(
+              this.state.playId,
+              audioLists,
+              this.getBaseAudioInfo(),
+            )
+        },
+      )
+      return
+    }
+
     const newAudioLists = [
       ...this.state.audioLists,
       ...audioLists.filter(
@@ -2103,6 +2198,7 @@ export default class ReactJkMusicPlayer extends PureComponent {
             singer: requestedAudio.singer || '',
             musicSrc: requestedAudio.musicSrc || '',
             lyric: requestedAudio.lyric || '',
+            lyricData: requestedAudio.lyricData,
           }
         : info
 
@@ -2114,7 +2210,15 @@ export default class ReactJkMusicPlayer extends PureComponent {
     }
 
     if (this.checkCurrentPlayingAudioIsInUpdatedAudioLists(nextProps)) {
-      this.setState({ audioLists: info.audioLists })
+      const lyricChanged =
+        this.state.lyric !== info.lyric ||
+        this.state.lyricData !== info.lyricData
+      this.setState({
+        audioLists: info.audioLists,
+        lyric: info.lyric,
+        lyricData: info.lyricData,
+        ...(lyricChanged ? { currentLyric: '' } : {}),
+      })
       return
     }
 
@@ -2145,13 +2249,25 @@ export default class ReactJkMusicPlayer extends PureComponent {
     // the queue is reordered (e.g. "Play Next").
     if (this.checkCurrentPlayingAudioIsInUpdatedAudioLists(nextProps)) {
       const info = this.getPlayInfoOfNewList(nextProps)
-      this.setState({ audioLists: info.audioLists })
-      this.props.onAudioListsChange &&
-        this.props.onAudioListsChange(
-          this.state.playId,
-          nextProps.audioLists,
-          this.getBaseAudioInfo(),
-        )
+      const lyricChanged =
+        this.state.lyric !== info.lyric ||
+        this.state.lyricData !== info.lyricData
+      this.setState(
+        {
+          audioLists: info.audioLists,
+          lyric: info.lyric,
+          lyricData: info.lyricData,
+          ...(lyricChanged ? { currentLyric: '' } : {}),
+        },
+        () => {
+          this.props.onAudioListsChange &&
+            this.props.onAudioListsChange(
+              this.state.playId,
+              nextProps.audioLists,
+              this.getBaseAudioInfo(),
+            )
+        },
+      )
       return
     }
 
@@ -2385,6 +2501,7 @@ export default class ReactJkMusicPlayer extends PureComponent {
     if (this.lyric) {
       this.lyric.stop()
       this.lyric = undefined
+      this.lyricGeneration = (this.lyricGeneration || 0) + 1
     }
   }
 
@@ -2430,7 +2547,10 @@ export default class ReactJkMusicPlayer extends PureComponent {
       // eslint-disable-next-line react/no-did-update-set-state
       this.setState({ isResetCoverRotate: true })
     }
-    if (prevState.lyric !== this.state.lyric) {
+    if (
+      prevState.lyric !== this.state.lyric ||
+      prevState.lyricData !== this.state.lyricData
+    ) {
       this.initLyricParser()
     }
   }
@@ -2449,7 +2569,7 @@ export default class ReactJkMusicPlayer extends PureComponent {
       if (clearPriorAudioLists) {
         this.changeAudioLists(nextProps)
       } else {
-        this.updateAudioLists(audioLists)
+        this.updateAudioLists(audioLists, nextProps)
       }
       if (!this.checkCurrentPlayingAudioIsInUpdatedAudioLists(nextProps)) {
         this.initPlayer(audioLists, false, false)

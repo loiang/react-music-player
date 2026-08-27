@@ -1,5 +1,28 @@
 import * as React from 'react'
 
+export interface ReactJkMusicPlayerTimedLyricLine {
+  /** Cue start in milliseconds. */
+  start: number
+  /** Cue end in milliseconds; the cue is hidden when currentTime === end. */
+  end: number
+  value: string
+}
+
+export interface ReactJkMusicPlayerTimedLyricData {
+  kind: 'timed'
+  lines: ReactJkMusicPlayerTimedLyricLine[]
+}
+
+export interface ReactJkMusicPlayerStaticLyricData {
+  kind: 'static'
+  /** Untimed text displayed independently of the audio clock. */
+  text: string
+}
+
+export type ReactJkMusicPlayerLyricData =
+  | ReactJkMusicPlayerTimedLyricData
+  | ReactJkMusicPlayerStaticLyricData
+
 export interface ReactJkMusicPlayerAudioInfo {
   cover: string
   currentTime: number
@@ -15,6 +38,7 @@ export interface ReactJkMusicPlayerAudioInfo {
   startDate: any
   volume: number
   lyric: string
+  lyricData?: ReactJkMusicPlayerLyricData
   currentLyric: string
   playIndex: number
   __PLAYER_KEY__: string
@@ -35,6 +59,7 @@ export interface ReactJkMusicPlayerAudioListProps {
   singer?: React.ReactNode
   cover?: string
   lyric?: string
+  lyricData?: ReactJkMusicPlayerLyricData
   duration?: number
   [key: string]: any
 }

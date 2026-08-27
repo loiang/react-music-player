@@ -14,10 +14,12 @@ const tagRegMap = {
 }
 
 export default class Lyric {
-  constructor(lrc, handler = () => {}) {
-    this.lrc = lrc
+  constructor(lrc, handler = () => {}, lyricData) {
+    this.lrc = typeof lrc === 'string' ? lrc : ''
+    this.lyricData = lyricData
     this.tags = {}
     this.lines = []
+    this.kind = 'legacy'
     this.handler = handler
     this.state = STATE_PAUSE
     this.curLine = 0
@@ -28,9 +30,51 @@ export default class Lyric {
   }
 
   _init() {
+    if (this._initLyricData()) {
+      return
+    }
+
     this._initTag()
 
     this._initLines()
+  }
+
+  _initLyricData() {
+    if (!this.lyricData || typeof this.lyricData !== 'object') {
+      return false
+    }
+
+    if (
+      this.lyricData.kind === 'static' &&
+      typeof this.lyricData.text === 'string'
+    ) {
+      this.kind = 'static'
+      this.lines = [{ txt: this.lyricData.text }]
+      return true
+    }
+
+    if (
+      this.lyricData.kind !== 'timed' ||
+      !Array.isArray(this.lyricData.lines)
+    ) {
+      return false
+    }
+
+    this.kind = 'timed'
+    this.lines = this.lyricData.lines
+      .filter(
+        ({ start, end, value } = {}) =>
+          Number.isFinite(start) &&
+          Number.isFinite(end) &&
+          typeof value === 'string',
+      )
+      .map(({ start, end, value }) => ({
+        time: start,
+        end,
+        txt: value,
+      }))
+      .sort((a, b) => a.time - b.time)
+    return true
   }
 
   _initTag() {
@@ -148,6 +192,15 @@ export default class Lyric {
     if (!this.lines.length) {
       return
     }
+
+    if (this.kind === 'static') {
+      if (this._lastActive !== 0) {
+        this._lastActive = 0
+        this._callHandler(0)
+      }
+      return
+    }
+
     let lo = 0
     let hi = this.lines.length - 1
     let active = -1
@@ -158,6 +211,18 @@ export default class Lyric {
         lo = mid + 1
       } else {
         hi = mid - 1
+      }
+    }
+
+    if (this.kind === 'timed') {
+      while (active >= 0 && timeMs >= this.lines[active].end) {
+        active -= 1
+      }
+      if (
+        active >= 0 &&
+        !(this.lines[active].time <= timeMs && timeMs < this.lines[active].end)
+      ) {
+        active = -1
       }
     }
     if (active === this._lastActive) {
